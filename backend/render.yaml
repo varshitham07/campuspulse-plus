@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: campuspulse-backend
+    runtime: node
+    plan: starter
+    buildCommand: cd backend && npm install
+    startCommand: cd backend && npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 4000
+      - key: CLIENT_ORIGIN
+        value: https://campuspulse-frontend.vercel.app
+      - key: DB_HOST
+        scope: secret
+      - key: DB_PORT
+        value: 3306
+      - key: DB_USER
+        scope: secret
+      - key: DB_PASSWORD
+        scope: secret
+      - key: DB_NAME
+        value: campuspulse
+      - key: DB_SSL_ENABLED
+        value: true
+      - key: JWT_SECRET
+        scope: secret
+      - key: ACCESS_TOKEN_TTL
+        value: 15m
+      - key: REFRESH_TOKEN_DAYS
+        value: 30
+      - key: COOKIE_SECURE
+        value: true
+      - key: COOKIE_SAMESITE
+        value: none
+      - key: BOOTSTRAP_LOCAL_ADMIN
+        value: false
+      - key: SMS_PROVIDER
+        value: console

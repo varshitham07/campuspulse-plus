@@ -1,0 +1,24 @@
+{
+  "buildCommand": "npm install",
+  "outputDirectory": ".",
+  "functions": {
+    "src/server.js": {
+      "memory": 512,
+      "maxDuration": 30
+    }
+  },
+  "env": [
+    "NODE_ENV",
+    "PORT",
+    "CLIENT_ORIGIN",
+    "DB_HOST",
+    "DB_PORT",
+    "DB_USER",
+    "DB_PASSWORD",
+    "DB_NAME",
+    "DB_SSL_ENABLED",
+    "JWT_SECRET",
+    "COOKIE_SECURE",
+    "COOKIE_SAMESITE"
+  ]
+}

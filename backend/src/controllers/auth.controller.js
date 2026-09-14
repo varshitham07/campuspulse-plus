@@ -91,7 +91,7 @@ async function register(req, res, next) {
 
     const normalizedMobile = normalizeMobile(mobile);
     const normalizedEmail = email ? String(email).trim().toLowerCase() : null;
-    const [existing] = await pool.query('SELECT id FROM users WHERE (:email IS NOT NULL AND email = :email) OR student_id = :studentId OR (:mobile IS NOT NULL AND mobile = :mobile)', { email: normalizedEmail, studentId: student_id.trim(), mobile: normalizedMobile });
+    const [existing] = await pool.query('SELECT id FROM users WHERE (:email IS NOT NULL AND email = :email) OR student_id = :studentId OR (:mobile IS NOT NULL AND mobile = :mobile)', { email: normalizedEmail, studentId: String(student_id).trim(), mobile: normalizedMobile });
     if (existing.length) throw new ApiError(409, 'An account with those details already exists.');
 
     const passwordHash = await bcrypt.hash(password || crypto.randomBytes(16).toString('hex'), 10);
@@ -101,14 +101,14 @@ async function register(req, res, next) {
     const [result] = await pool.query(
       `INSERT INTO users (full_name, email, password_hash, role, department, year_of_study, student_id, mobile, class_section, registration_token, approval_status, is_active)
        VALUES (:fullName, :email, :passwordHash, 'student', :department, :year, :studentId, :mobile, :className, :registrationToken, 'pending', FALSE)`,
-      { fullName: full_name.trim(), email: normalizedEmail, passwordHash, department: canonicalDepartment, year: Number(year_of_study), studentId: student_id.trim(), mobile: normalizedMobile, className, registrationToken }
+      { fullName: full_name.trim(), email: normalizedEmail, passwordHash, department: canonicalDepartment, year: Number(year_of_study), studentId: student_id.trim(), mobile: normalizedMobile, className }
     );
 
     res.status(201).json({
       message: 'Registration submitted. Show this token to your college admin for verification.',
       registrationToken,
       status: 'pending',
-      user: { id: result.insertId, full_name: full_name.trim(), email: normalizedEmail, department: canonicalDepartment, year_of_study: Number(year_of_study), student_id, mobile: normalizedMobile, class_section: className, approval_status: 'pending' },
+      user: { id: result.insertId, full_name: full_name.trim(), email: normalizedEmail, department: canonicalDepartment, year_of_study: Number(year_of_study), student_id, mobile: normalizedMobile, class_section: className }
     });
   } catch (err) { next(err); }
 }
@@ -120,7 +120,7 @@ async function login(req, res, next) {
     const [rows] = await pool.query('SELECT * FROM users WHERE email = :email', { email: String(email).trim().toLowerCase() });
     const user = rows[0];
     if (!user) throw new ApiError(401, 'Incorrect email or password.');
-    if (user.approval_status !== 'approved' || !user.is_active) throw new ApiError(403, user.approval_status === 'pending' ? 'Your registration is still awaiting college admin approval.' : 'Your account is not currently active.');
+    if (user.approval_status !== 'approved' || !user.is_active) throw new ApiError(403, user.approval_status === 'pending' ? 'Your registration is still awaiting college admin approval.' : 'Your account has been deactivated.');
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) throw new ApiError(401, 'Incorrect email or password.');
     const token = signAccessToken(user); delete user.password_hash;
@@ -143,7 +143,7 @@ async function requestOtp(req, res, next) {
     await pool.query(`INSERT INTO auth_otps (user_id, destination, purpose, code_hash, expires_at) VALUES (:userId, :destination, 'login_recovery', :codeHash, DATE_ADD(NOW(), INTERVAL 5 MINUTE))`, { userId: user.id, destination, codeHash: hashCode(code) });
     const delivery = await deliverOtp(destination, code);
     if (!delivery.delivered) throw new ApiError(503, 'OTP delivery is not configured yet. Add your SMS provider credentials to the backend environment.');
-    res.json({ message: 'OTP sent to your registered contact.', destinationMasked: destination.length > 5 ? `${destination.slice(0, 3)}••••${destination.slice(-2)}` : 'registered contact', devCode: delivery.mode === 'console' && process.env.NODE_ENV !== 'production' ? code : undefined });
+    res.json({ message: 'OTP sent to your registered contact.', destinationMasked: destination.length > 5 ? `${destination.slice(0, 3)}••••${destination.slice(-2)}` : 'registered contact' });
   } catch (err) { next(err); }
 }
 
@@ -174,13 +174,13 @@ async function refresh(req, res, next) {
   try {
     const raw = parseCookies(req)[REFRESH_COOKIE];
     if (!raw) throw new ApiError(401, 'No active session.');
-    const [rows] = await pool.query(`SELECT s.id AS session_id, u.* FROM auth_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = :tokenHash AND s.revoked_at IS NULL AND s.expires_at > NOW()`, { tokenHash: hashToken(raw) });
+    const [rows] = await pool.query(`SELECT s.id AS session_id, s.user_id, u.* FROM auth_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = :tokenHash AND s.revoked_at IS NULL AND s.expires_at > NOW()`, { tokenHash: hashToken(raw) });
     const session = rows[0];
     if (!session || !session.is_active || session.approval_status !== 'approved') { clearRefreshCookie(res); throw new ApiError(401, 'Your session is no longer valid.'); }
     await pool.query('UPDATE auth_sessions SET revoked_at = NOW() WHERE id = :id', { id: session.session_id });
     const token = signAccessToken(session); delete session.password_hash; delete session.session_id;
-    const clubLeadership = await getClubLeadership(session.id);
-    await createRefreshSession(req, res, session.id);
+    const clubLeadership = await getClubLeadership(session.user_id);
+    await createRefreshSession(req, res, session.user_id);
     res.json({ user: session, token, clubLeadership, expiresIn: ACCESS_TTL });
   } catch (err) { next(err); }
 }
@@ -194,7 +194,7 @@ async function logout(req, res, next) {
 }
 
 async function publicDepartments(req,res,next){try{const [rows]=await pool.query('SELECT id,code,name FROM departments WHERE is_active=TRUE ORDER BY name');res.json({departments:rows});}catch(err){next(err);}}
-async function publicClasses(req,res,next){try{const params={};const where=['c.is_active=TRUE'];if(req.query.departmentId){where.push('c.department_id=:departmentId');params.departmentId=Number(req.query.departmentId);}if(req.query.year){where.push('c.year_of_study=:year');params.year=Number(req.query.year);}const [rows]=await pool.query(`SELECT c.id,c.name,c.year_of_study,c.section,d.code AS department_code,d.name AS department_name FROM classes c JOIN departments d ON d.id=c.department_id WHERE ${where.join(' AND ')} ORDER BY d.code,c.year_of_study,c.section`,params);res.json({classes:rows});}catch(err){next(err);}}
+async function publicClasses(req,res,next){try{const params={};const where=['c.is_active=TRUE'];if(req.query.departmentId){where.push('c.department_id=:departmentId');params.departmentId=Number(req.query.departmentId);}if(req.query.year){where.push('c.year_of_study=:year');params.year=Number(req.query.year);}const [rows]=await pool.query(`SELECT c.id, c.name, c.year_of_study, d.id AS department_id, d.code AS department_code, d.name AS department_name FROM classes c JOIN departments d ON d.id=c.department_id WHERE ${where.join(' AND ')} ORDER BY d.code, c.year_of_study, c.section`,params);res.json({classes:rows});}catch(err){next(err);}}
 
 async function me(req, res, next) {
   try {
